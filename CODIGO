@@ -1,0 +1,363 @@
+# TFM CARINA URIBE DIAZ #
+
+######################################################################
+
+# Librerias que se utilizaran
+library(edgeR)
+library(factoextra)
+library(pheatmap)
+library(clusterProfiler)
+library(org.Hs.eg.db)
+library(ReactomePA)
+library(ggVennDiagram)
+library(stringr)
+library("GO.db")
+library("reactome.db")
+library(tidyverse)
+library(dplyr)
+library(DOSE)
+library(enrichplot)
+
+# ANALISIS DE EXPRESION DIFERENCIA
+
+## Cargar los datos
+
+### Lectura de la matriz de contajes
+counts = read.csv("Matriz_Contaje.csv", row.names = 1)
+countsMatrix = as.matrix(counts)
+rm(counts)
+### Sincronizacion de variables
+muestras = colnames(countsMatrix)
+grupos = c(rep("SANO", 4), rep("TUMOR", 6))
+colores = c(rep("red", 4), rep("blue", 6))
+targets = data.frame(sample=muestras, group=grupos, cols=colores)
+rownames(targets) = targets[,1]
+### Verificacion de matriz
+if (sum(colnames(countsMatrix)!=rownames(targets))>0)
+  cat("Verifique que las filas del objeto targets coinciden con las columnas de la matriz de datos")
+
+## Procesado de los datos
+
+### Filtraje de genes poco expresados, expresados en al menos 2 muestras
+thresh = countsMatrix > 0
+keep = (rowSums(thresh[,1:4]) >= 2) & (rowSums(thresh[,5:10]) >= 2)
+counts.keep = countsMatrix[keep,]
+dim(countsMatrix)
+dim(counts.keep)
+head(countsMatrix)
+head(counts.keep)
+### Uso de clases especificas para manejar los datos
+dgeObj = DGEList(counts = counts.keep, 
+                 lib.size = colSums(counts.keep),
+                 norm.factors = rep(1,ncol(counts.keep)), 
+                 samples = targets,
+                 group = targets$group, 
+                 genes = rownames(counts.keep), 
+                 remove.zeros = FALSE)
+dgeObj
+### Normalizacion
+dgeObj_norm = calcNormFactors(dgeObj)
+### Pasar las muestras a valores logaritmicos
+log2count_norm = cpm(dgeObj_norm, log=TRUE)
+
+## Exploracion de los datos
+
+### Distribucion de contajes
+### Diagrama de cajas
+par(mfrow=c(2,1))
+rawCounts = dgeObj_norm$counts
+boxplot(rawCounts, ylab="CPM",las=2, xlab="", col = dgeObj$samples$cols, cex.axis=0.7, main="Distribucion de contajes")
+boxplot(log2count_norm, ylab="Log2-CPM",las=2, xlab="", col=dgeObj$samples$cols, cex.axis=0.7, main="Distribucion de log(contajes)")
+abline(h=median(log2count_norm), col="blue")
+par(mfrow=c(1,1))
+### Analisis de similaridad entre muestras
+### Distribucion de muestras con Matriz de distancias
+sampleDists = dist(t(log2count_norm))
+round(sampleDists,1)
+fviz_dist(sampleDists)
+### Agrupamiento jerarquico
+hc = hclust(sampleDists)
+plot(hc,labels = colnames(log2count_norm),main = "Agrupamiento jerarquico de las muestras", cex=0.8)
+
+## Analisis de expresion diferencial
+
+### Seleccion de genes usando limma-Voom
+### Matriz de dise??o y contrastes
+group = as.factor(dgeObj_norm$samples$group)
+design = model.matrix(~ 0 + group)
+colnames(design) = gsub("group", "", colnames(design))
+sampleNames = rownames(dgeObj_norm$samples)
+row.names(design) = sampleNames
+design
+### Definicion de comparacion de interes
+cont.matrix = makeContrasts(SANOvsTUMOR = TUMOR - SANO, levels=colnames(design))
+cont.matrix
+### Transformacion de los contajes
+voomObj = voom(dgeObj_norm, design)
+voomObj
+### Seleccion de genes diferencialmente expresados
+### Regularizacion del estimador del error
+fit = lmFit(voomObj)
+fit.cont = contrasts.fit(fit, cont.matrix)
+fit.cont = eBayes(fit.cont)
+### Top table
+toptab = topTable(fit.cont,coef=1,sort.by="p", number=nrow(fit.cont))
+head(toptab)
+## Guardamos nuestra Top table
+write.csv(toptab, file="Anexo_1_topTable_miRNAs.csv")
+### Visualizacion de los resultados
+### Volcano plot
+volcanoplot(fit.cont,coef=1,highlight=100, main="TUMOR vs SANO")
+### Seleccion de genes FC > 1 y pvalue < 0.05
+topmiRNAs_1 = subset(toptab, (abs(logFC)> 1) & (adj.P.Val < 0.05))
+head(topmiRNAs_1)
+### Guardamos nuestra topGenes_1
+write.csv(topmiRNAs_1, file="Anexo_2_topmiRNAs.csv")
+### Guardamos solo los nombres
+topmiRNAs = rownames(topmiRNAs_1)
+length(topmiRNAs)
+### Headmap
+mat  = log2count_norm[topmiRNAs, ]
+mat  = mat - rowMeans(mat)
+pheatmap(mat)
+
+######################################################################
+
+# ANALISIS DE ENRIQUECIMIENTO FUNCIONAL
+
+## Anotacion Indirecta
+
+### Prediccion de genes diana con multiMir
+miRNAs_Prediction = get_multimir (mirna = topmiRNAs, table = "mirtarbase",  summary = T) 
+head(miRNAs_Prediction@data)
+#### Obtenemos los genes con evidencia experimental fuerte, es decir por ensayo "Luciferase"
+miRNA_targets = miRNAs_Prediction@data[grep("Luciferase", miRNAs_Prediction@data[, "experiment"]), ]
+#### Guardamos la prediccion de genes diana
+write.csv(miRNA_targets, file="Anexo_3_miRNAs_Prediction.csv")
+#### Contar cuantos genes diana hay por miRNA
+genes_diana = data.frame(table (miRNA_targets$mature_mirna_id)) 
+write.csv(genes_diana, file="Genes_Diana.csv")
+
+### Analisis de enriquecimiento Indirecta GO-BP mulTiMiR-miRTarBase
+ego = enrichGO(gene = miRNA_targets$target_ensembl, 
+               keyType = "ENSEMBL", 
+               OrgDb = org.Hs.eg.db,
+               ont="BP",
+               pAdjustMethod = "BH",
+               pvalueCutoff = 0.05,
+               qvalueCutoff = 0.05)
+head (ego)
+#### Guardamos el resultado del enriquecimiento
+write.csv(ego@result, file="Anexo_4_EF_Indirecta_GO-BP_multiMiR_miRTarBase.csv")
+#### Visualizacion de los datos
+barplot(ego, drop=TRUE, showCategory=10, title = "EF_Indirecta_GO-BP_multiMiR_miRTarBase")
+
+### Analisis de enriquecimiento Indirecta Reactome mulTiMiR-miRTarBase
+epat = enrichPathway(gene=miRNA_targets$target_entrez, pvalueCutoff = 0.05, readable=TRUE)
+head(epat)
+#### Guardamos el resultado del enriquecimiento
+write.csv(epat@result, file="Anexo_5_EF_Indirecta_React_multiMiR_miRTarBase.csv")
+#### Visualizacion de los datos
+barplot(epat, drop=TRUE, showCategory=10, title = "EF_Indirecta_React_multiMiR_miRTarBase")
+
+### Analisis de Enriquecimiento con bases de datos miEAA
+
+#### Analisis de enriquecimiento Indirecta GO
+#### Leemos el archivo con la base de datos
+encode2 = read.gmt("GO_Annotations_indirect_mature.gmt")
+#### Hacemos el enriquecimiento funcional
+ego3 = enricher(gene = topmiRNAs, TERM2GENE = encode2)
+head(ego3)
+#### Guardamos el archivo
+write.csv(ego3@result, file="Anexo_7_EF_Indirecta_GO_miEAA.csv")
+#### Visualizacion de los datos
+barplot(ego3, drop=TRUE, showCategory=10, title = "EF_Indirecta_GO_miEAA")
+
+#### Analisis de enriquecimiento Indirecta GO-BP miRPathDB
+#### Leemos el archivo con la base de datos
+encode3 = read.gmt("miRPathDB_GO_Biological_process_mature.gmt")
+#### Hacemos el enriquecimiento funcional
+ego4 = enricher(gene = topmiRNAs, TERM2GENE = encode3)
+head(ego4)
+#### Guardamos el archivo
+write.csv(ego4@result, file="Anexo_8_EF_Indirecta_GO-BP_miRPathDB_miEAA.csv")
+#### Visualizacion de los datos
+barplot(ego4, drop=TRUE, showCategory=10, title = "_EF_Indirecta_GO-BP_miRPathDB_miEAA")
+
+#### Analisis de enriquecimiento Indirecta Reactome miRPathDB
+#### Leemos el archivo con la base de datos
+encode4 = read.gmt("Pipeline_R/miRPathDB_Reactome_mature.gmt")
+#### Hacemos el enriquecimiento funcional
+epat2 = enricher(gene = topmiRNAs, TERM2GENE = encode4)
+head(epat2)
+#### Guardamos el archivo
+write.csv(epat2@result, file="Anexo_9_EF_Indirecta_Reactome_miRPathDB_miEAA.csv")
+#### Visualizacion de los datos
+barplot(epat2, drop=TRUE, showCategory=10, title = "EF_Indirecta_Reactome_miRPathDB_miEAA")
+
+## Anotacion Directa
+
+### Analisis de Enriquecimiento con bases de datos miEAA
+
+#### Analisis de enriquecimiento Directa GO
+#### Leemos el archivo con la base de datos
+encode = read.gmt("Pipeline_R/GO_Annotations_mature.gmt")
+#### Hacemos el enriquecimiento funcional
+ego2 = enricher(gene = topmiRNAs, TERM2GENE = encode)
+head(ego2)
+#### Guardamos el archivo
+write.csv(ego2@result, file="Anexo_6_EF_Directa_GO_miEAA.csv")
+#### Visualizacion de los datos
+data = structure(list(V1 = ego2@result$ID, V2 = ego2@result$Count),
+                 .Names = c("V1", "V2"), row.names = c(NA, 10L), class = "data.frame")
+barplot(height = data$V2[10:1], names = data$V1[10:1], horiz = T, xlab="Count", 
+        col = c("red"), las=1, cex.names = 0.4, main = "EF_Directa_GO_miEAA")
+
+######################################################################
+
+# COMPARACION DE METODOS
+
+## Comparacion con mapas de enriquecimiento
+
+### Anotacion GO
+
+#### Prepraramos la tabla 1 
+res1 = ego@result
+row.names (res1) = 1: nrow (res1)
+res1$Description = tolower(res1$Description)
+#### Preparamos la tabla 2
+res2 = ego2@result
+row.names (res2) = 1: nrow (res2)
+res2$ID = str_extract(res2$ID,"GO:[0-9]+")
+res2$Description = gsub("_", " ", tolower(res2$Description))
+res2$Description = gsub("\\(", "", gsub("\\)", "",gsub("go:[0-9]+", "", res2$Description))) 
+res2$Description = gsub(".$", "", res2$Description)
+#### Preparamos la tabla 3
+res3 = ego3@result
+row.names (res3) = 1: nrow (res3)
+res3$ID = str_extract(res3$ID,"GO:[0-9]+")
+res3$Description = gsub("_", " ", tolower(res3$Description))
+res3$Description = gsub("\\(", "", gsub("\\)", "",gsub("go:[0-9]+", "", res3$Description)))
+res3$Description = gsub(".$", "", res3$Description)
+#### Preparamos la tabla 4
+res4 = ego4@result
+row.names (res4) = 1: nrow (res4)
+res4$Description = gsub("_", " ", res4$Description)
+res4$ID = gsub("_", " ", res4$ID)
+##### Agregamos el ID GO a los terminos
+tbl = toTable(GOTERM)
+tbl = tbl[grep("BP", tbl$Ontology),]
+tbl = tbl[, 2:3]
+tbl = tbl[!duplicated(tbl), ]
+colnames(tbl) = c("ID", "Description")
+tbl$Description = tolower(tbl$Description)
+##### Unimos las dos tablas
+tab = left_join(tbl, res4, by = "Description")
+tab = na.omit(tab)
+tab = tab[,-3]
+tab = tab%>% rename(ID = ID.x)
+res4 = tab[order(tab$pvalue), ]
+#### Se hace un dataframe con los top 50 por pvalue de resultados encontrados para cada lista 
+res_df1 = res1[1:50,]
+res_df2 = res2[1:35,]
+res_df3 = res3[1:50,]
+res_df4 = res4[1:50,]
+#### Unimos las 3 listas para tener un dataframe global
+res_df_all = rbind(res_df1, res_df2, res_df3, res_df4)
+#### Anadimos la columna Cluster, necesaria para el emapplot con multiples listas. Permite identificar el origen de las listas
+res_df_all$Cluster = c(rep("List1", nrow(res_df1)),rep("List2", nrow(res_df2)), 
+                       rep("List3", nrow(res_df3)), rep("List4", nrow(res_df4))) 
+#### Hacemos factor
+res_df_all$Cluster = factor(res_df_all$Cluster) 
+#### Reordenamos columnas para que la columna Cluster sea la primera
+res_df_all1 = res_df_all[,c("Cluster", colnames(res_df_all))][,-11]
+#### Hacemos el objeto compareClusterResult que necesita la funcion emapplot para hacer el grafico con multiples listas
+ccobj = new("compareClusterResult", compareClusterResult=res_df_all1, geneClusters=list(List1=c(), 
+                                                                                        List2=c(), List3=c(), List4=c()), fun='enrichGO')
+simmatrix = pairwise_termsim(ccobj)
+#### Hacemos el grafico
+emapplot(simmatrix, showCategory=50, cex_category=0.5, cex_line = 0.2) + labs(title = "Anotacion GO")
+
+### Anotacion Reactome
+
+#### Preparamos la tabla 5
+res5 = epat@result
+row.names (res5) = 1: nrow (res5)
+res5$Description = gsub("_", " ", tolower(res5$Description))
+#### Preparamos la tabla 6
+res6 = epat2@result
+row.names (res6) = 1: nrow (res6)
+res6$Description = gsub("_", " ", tolower(res6$Description))
+##### Agregamos el ID Reactome a los terminos
+tbl2 = toTable(reactomePATHNAME2ID)
+tbl2 = tbl2[grep("Homo sapiens: ", tbl2$path_name),]
+colnames(tbl2) = c("ID", "Description")
+tbl2$Description = gsub("_", " ", tolower(tbl2$Description))
+tbl2$Description = gsub("homo sapiens:", "", tbl2$Description)
+tbl2$Description = gsub("^.", "", tolower(tbl2$Description))
+tab2 = left_join(tbl2, res6, by = "Description")
+tab2 = na.omit(tab2)
+tab2 = tab2[,-3]
+tab2 = tab2%>% rename(ID = ID.x)
+res6 = tab2[order(tab2$pvalue), ]
+#### Se hace un dataframe con los top 50 resultados encontrados para cada lista
+res_df5 = res5[1:50,]
+res_df6 = res6[1:50,]
+#### Unimos las 2 listas para tener un dataframe global
+res_df_all_2 = rbind(res_df5, res_df6)
+#### Anadimos la columna Cluster, necesaria para el emapplot con multiples listas. Permite identificar el origen de las listas
+res_df_all_2$Cluster = c(rep("List1", nrow(res_df5)),rep("List2", nrow(res_df6))) 
+#### Hacemos factor
+res_df_all_2$Cluster = factor(res_df_all_2$Cluster) 
+#### Reordenamos columnas para que la columna Cluster sea la primera
+res_df_all_3 = res_df_all_2[,c("Cluster", colnames(res_df_all_2))][,-11]
+#### Hacemos el objeto compareClusterResult que necesita la funcion emapplot para hacer el grafico con multiples listas
+ccobj2 = new("compareClusterResult", compareClusterResult=res_df_all_3, geneClusters=list(List1=c(), List2=c()), fun="enrichPathway")
+simmatrix2 = pairwise_termsim(ccobj2)
+#### Hacemos el grafico
+emapplot(simmatrix2, showCategory=50, cex_category=0.5, cex_line = 0.2) + labs(title = "Anotacion Reactome")
+
+## Comparacion con Diagrama de Venn
+
+### Anotacion GO
+
+#### Hacemos el diagrama de Venn
+x = list(A = res1$Description, B = res2$Description, C = res3$Description, D = res4$Description)
+ggVennDiagram(x, category.names = c("Indirecta_GO-BP_mulTiMiR_miRTarBase","Directa_GO_miEAA",
+                                    "Indirecta_GO_miEAA","Indirecta_GO-BP_miEAA_miRPArhDB")) + labs(title = "Anotacion GO")
+
+### Anotacion Reactome
+#### Hacemos el diagrama de Venn
+x2 = list(A = res5$Description, B = res6$Description)
+ggVennDiagram(x2, category.names = c("Indirecta_Reactome_mulTiMiR_miRTarBase","Indirecta_Reactome_miEAA_miRPArhDB")) + labs(title = "Anotacion Reactome")
+
+### NOTA ### Guardamos todos los graficos en un archivo
+
+pdf(file="EnrichmentPlots.pdf")
+par(mfrow=c(2,1))
+rawCounts = dgeObj_norm$counts
+boxplot(rawCounts, ylab="CPM",las=2, xlab="", col = dgeObj$samples$cols, cex.axis=0.7, main="Distribucion de contajes")
+boxplot(log2count_norm, ylab="Log2-CPM",las=2, xlab="", col=dgeObj$samples$cols, cex.axis=0.7, main="Distribucion de log(contajes)")
+abline(h=median(log2count_norm), col="blue")
+par(mfrow=c(1,1))
+plot(hc,labels = colnames(log2count_norm),main = "Agrupamiento jerarquico de las muestras", cex=0.8)
+volcanoplot(fit.cont,coef=1,highlight=100, main="TUMOR vs SANO")
+pheatmap(mat)
+barplot(ego, drop=TRUE, showCategory=10, title = "EF_Indirecta_GO-BP_multiMiR_miRTarBase")
+barplot(epat, drop=TRUE, showCategory=10, title = "EF_Indirecta_React_multiMiR_miRTarBase")
+barplot(ego3, drop=TRUE, showCategory=10, title = "EF_Indirecta_GO_miEAA")
+barplot(ego4, drop=TRUE, showCategory=10, title = "_EF_Indirecta_GO-BP_miRPathDB_miEAA")
+barplot(epat2, drop=TRUE, showCategory=10, title = "EF_Indirecta_Reactome_miRPathDB_miEAA")
+barplot(height = data$V2[10:1], names = data$V1[10:1], horiz = T, xlab="Count", 
+        col = c("red"), las=1, cex.names = 0.4, main = "EF_Directa_GO_miEAA")
+emapplot(simmatrix, showCategory=50, cex_category=0.5, cex_line = 0.2) + labs(title = "Anotacion GO")
+emapplot(simmatrix2, showCategory=50, cex_category=0.5, cex_line = 0.2) + labs(title = "Anotacion Reactome")
+ggVennDiagram(x, category.names = c("Indirecta_GO-BP_mulTiMiR_miRTarBase","Directa_GO_miEAA",
+                                    "Indirecta_GO_miEAA","Indirecta_GO-BP_miEAA_miRPArhDB")) + labs(title = "Anotacion GO")
+ggVennDiagram(x2, category.names = c("Indirecta_Reactome_mulTiMiR_miRTarBase","Indirecta_Reactome_miEAA_miRPArhDB")) + labs(title = "Anotacion Reactome")
+dev.off()
+
+######################################################################
+
+# FIN #
+
