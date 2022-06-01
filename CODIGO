@@ -18,6 +18,8 @@ library(dplyr)
 library(DOSE)
 library(enrichplot)
 
+######################################################################
+
 # ANALISIS DE EXPRESION DIFERENCIA
 
 ## Cargar los datos
