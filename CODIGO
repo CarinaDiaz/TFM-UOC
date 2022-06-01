@@ -135,8 +135,10 @@ miRNA_targets = miRNAs_Prediction@data[grep("Luciferase", miRNAs_Prediction@data
 #### Guardamos la prediccion de genes diana
 write.csv(miRNA_targets, file="Anexo_3_miRNAs_Prediction.csv")
 #### Contar cuantos genes diana hay por miRNA
-genes_diana = data.frame(table (miRNA_targets$mature_mirna_id)) 
-write.csv(genes_diana, file="Genes_Diana.csv")
+genes_diana = data.frame(miRNA_targets$mature_mirna_id, miRNA_targets$target_symbol)
+genes_diana = genes_diana[!duplicated(genes_diana), ]
+genes_diana2 = data.frame(table (genes_diana$miRNA_targets.mature_mirna_id)) 
+write.csv(genes_diana2, file="Genes_Diana.csv")
 
 ### Analisis de enriquecimiento Indirecta GO-BP mulTiMiR-miRTarBase
 ego = enrichGO(gene = miRNA_targets$target_ensembl, 
@@ -320,7 +322,6 @@ emapplot(simmatrix2, showCategory=50, cex_category=0.5, cex_line = 0.2) + labs(t
 ## Comparacion con Diagrama de Venn
 
 ### Anotacion GO
-
 #### Hacemos el diagrama de Venn
 x = list(A = res1$Description, B = res2$Description, C = res3$Description, D = res4$Description)
 ggVennDiagram(x, category.names = c("Indirecta_GO-BP_mulTiMiR_miRTarBase","Directa_GO_miEAA",
