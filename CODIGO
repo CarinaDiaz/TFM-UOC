@@ -1,3 +1,4 @@
+
 # TFM CARINA URIBE DIAZ #
 
 ######################################################################
@@ -325,13 +326,13 @@ emapplot(simmatrix2, showCategory=50, cex_category=0.5, cex_line = 0.2) + labs(t
 
 ### Anotacion GO
 #### Hacemos el diagrama de Venn
-x = list(A = res1$Description, B = res2$Description, C = res3$Description, D = res4$Description)
+x = list(A = res1$Description[1:1000], B = res2$Description[1:1000], C = res3$Description[1:35], D = res4$Description[1:1000])
 ggVennDiagram(x, category.names = c("Indirecta_GO-BP_mulTiMiR_miRTarBase","Directa_GO_miEAA",
                                     "Indirecta_GO_miEAA","Indirecta_GO-BP_miEAA_miRPArhDB")) + labs(title = "Anotacion GO")
 
 ### Anotacion Reactome
 #### Hacemos el diagrama de Venn
-x2 = list(A = res5$Description, B = res6$Description)
+x2 = list(A = res5$Description[1:1000], B = res6$Description[1:1000])
 ggVennDiagram(x2, category.names = c("Indirecta_Reactome_mulTiMiR_miRTarBase","Indirecta_Reactome_miEAA_miRPArhDB")) + labs(title = "Anotacion Reactome")
 
 ### NOTA ### Guardamos todos los graficos en un archivo
